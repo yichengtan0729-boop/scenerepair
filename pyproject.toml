@@ -1,0 +1,58 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "scenerepair"
+version = "1.0.0"
+description = "Label-free causal localization and minimal suffix repair for counterfactual spatial reasoning"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+authors = [{name = "Yicheng Tan"}]
+dependencies = [
+  "numpy>=1.26",
+  "pandas>=2.1",
+  "Pillow>=10.2",
+  "PyYAML>=6.0",
+  "tqdm>=4.66",
+  "scipy>=1.11",
+  "scikit-learn>=1.4",
+  "joblib>=1.3",
+  "matplotlib>=3.8",
+]
+
+[project.optional-dependencies]
+hf = [
+  "datasets>=3.3",
+  "transformers>=4.49",
+  "accelerate>=1.2",
+  "qwen-vl-utils>=0.0.10",
+  "torch>=2.2",
+]
+api = ["openai>=1.65"]
+quant = ["bitsandbytes>=0.43"]
+dev = ["pytest>=8.0", "ruff>=0.8"]
+all = [
+  "datasets>=3.3",
+  "transformers>=4.49",
+  "accelerate>=1.2",
+  "qwen-vl-utils>=0.0.10",
+  "torch>=2.2",
+  "openai>=1.65",
+  "bitsandbytes>=0.43",
+  "pytest>=8.0",
+]
+
+[project.scripts]
+scenerepair = "scenerepair.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["scenerepair*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 110

@@ -1,0 +1,31 @@
+data:
+  source: jsonl
+  jsonl_path: examples/toy/toy.jsonl
+  image_columns: [view1, view2, view3]
+model:
+  backend: mock
+  model_name: mock-spatial
+  max_new_tokens: 256
+critic:
+  mode: symbolic
+  symbolic_weight: 1.0
+  vlm_weight: 0.0
+  transition_threshold: 0.99
+  causal_threshold: 0.0
+  global_threshold: 0.99
+  intervention_top_k: 2
+  intervention_types: [frame_swap, operation_inverse, relation_flip]
+repair:
+  enabled: true
+  num_candidates: 2
+  abstain_margin: -0.2
+run:
+  output_dir: outputs/mock_smoke
+  seed: 42
+  limit: 2
+  num_traces: 2
+  max_reasoning_steps: 6
+  overwrite: true
+  run_baselines: true
+  baseline_methods: [direct, cot, self_consistency, full_reflection]
+  fail_fast: true
