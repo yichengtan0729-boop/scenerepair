@@ -1,55 +1,63 @@
 # SceneRepair
 
-**Label-Free Causal Localization and Minimal Suffix Repair for Counterfactual Spatial Reasoning**
+**Label-Free Necessity-Sufficiency Causal-Root Localization and Minimal Repair for Counterfactual Spatial Reasoning**
 
-SceneRepair is a complete method-oriented experiment codebase for frozen vision-language models. It targets multi-view counterfactual spatial reasoning, with MindEdit-Bench L4 (`single_view_spatial_editing`) and L5 (`cross_view_visibility`) as the primary evaluation tasks.
+SceneRepair is a method-oriented experiment codebase for frozen vision-language models. It targets multi-view counterfactual spatial reasoning, with MindEdit-Bench L4 (`single_view_spatial_editing`) and L5 (`cross_view_visibility`) as the primary tasks. The benchmark answer is not used by generation, diagnosis, intervention, candidate ranking, or repair; it is consumed only after predictions are saved by the evaluation module.
 
-The method does not use the ground-truth answer during inference, diagnosis, intervention, candidate selection, or repair. Labels are consumed only by the evaluation module after predictions have been written.
+## Final method
 
-## Method
+For each example, SceneRepair performs:
 
-For every example, SceneRepair performs:
+1. typed scene-state trajectory generation with explicit prerequisite indices;
+2. construction of a spatial causal dependency graph;
+3. label-free symbolic, VLM, and optional learned transition verification;
+4. paired necessity and sufficiency interventions over reference frames, operations, relations, object identity, visibility, and visual evidence;
+5. interventional-consistency testing across semantically equivalent variants;
+6. ancestor-minimal causal-root localization rather than downstream symptom selection;
+7. descendant-closed minimal suffix regeneration;
+8. calibrated label-free acceptance using a one-sided lower confidence bound;
+9. consistency-weighted aggregation over multiple traces.
 
-1. typed scene-state trajectory generation;
-2. label-free symbolic, VLM, and optional learned transition criticism;
-3. causal interventions on reference frame, operation, relation, object identity, visibility, and visual evidence;
-4. earliest consequential-error localization;
-5. minimal suffix regeneration while preserving the verified prefix;
-6. no-harm candidate selection with an explicit abstention margin;
-7. consistency-weighted aggregation over multiple traces.
-
-For transition `t`:
+For a state node `t`, the implementation computes:
 
 ```text
-anomaly_t = 1 - consistency_t
-causal_t  = 0.7 * JS(p_original, p_intervened)
-            + 0.3 * max(0, consistency_intervened - consistency_t)
+anomaly_t     = 1 - transition_consistency_t
+necessity_t   = answer_shift + descendant_consistency_drop
+sufficiency_t = descendant_consistency_gain + local_recovery + confidence_gain
+ICT_t         = agreement across equivalent intervention realizations
+root_t        = weighted_geometric_mean(anomaly_t, necessity_t, sufficiency_t, ICT_t)
 ```
 
-The earliest transition passing both anomaly and causal thresholds is repaired. The unchanged trace remains an implicit no-op candidate, so a repair is applied only when it improves the configured objective by more than the abstention margin.
+A node must pass all component thresholds. Among nodes whose root evidence is close to the strongest valid node, SceneRepair selects an ancestor-minimal node. This prevents a large downstream symptom from replacing the upstream cause.
+
+A candidate repair is accepted only when:
+
+```text
+LCB(candidate_objective - original_objective) > abstain_margin
+and consistency_gain >= minimum_consistency_gain
+```
+
+The unchanged trace therefore remains the default no-op decision.
 
 ## Included components
 
-- MindEdit-Bench Hugging Face loader for L4/L5 and all other published subsets;
-- generic local multi-image JSONL loader;
+- MindEdit-Bench Hugging Face loader and generic multi-image JSONL loader;
 - local Qwen2.5-VL and Qwen3-VL backends;
 - OpenAI-compatible/vLLM multimodal backend;
 - deterministic mock backend for full pipeline validation;
-- typed state schema and robust JSON fallback parser;
+- typed spatial states with explicit dependency edges;
 - symbolic, VLM, and learned transition critics;
-- six causal intervention families;
-- earliest-error localization;
-- minimal suffix repair and full-regeneration ablation;
+- six structured intervention families and equivalent variants;
+- necessity-sufficiency causal-root localization;
+- descendant-closed suffix repair with calibrated abstention;
 - direct, CoT, self-consistency, full-reflection, and structured-original baselines;
-- automatic transition-critic training from generated corruptions;
-- bootstrap confidence intervals, paired McNemar testing, no-harm and repair metrics;
+- automatic lightweight critic training from generated corruptions;
+- bootstrap confidence intervals, McNemar testing, no-harm and repair metrics;
 - synthetic known-corruption localization evaluation;
 - multi-seed, ablation, visualization, and aggregation scripts;
-- unit tests including a label-free invariance test and complete end-to-end pipeline test.
+- unit tests for label-free invariance, dependency graphs, calibration, and end-to-end execution.
 
 ## Installation
-
-### Local Qwen-VL
 
 ```bash
 conda create -n scenerepair python=3.10 -y
@@ -63,7 +71,7 @@ For 4-bit inference:
 pip install -e ".[hf,quant,dev]"
 ```
 
-### OpenAI-compatible or vLLM endpoint
+For an OpenAI-compatible or vLLM endpoint:
 
 ```bash
 pip install -e ".[api,dev]"
@@ -77,38 +85,26 @@ python -m scenerepair.cli --config configs/mock_smoke.yaml --task all
 python -m pytest -q
 ```
 
-The mock backend uses the same data, parsing, diagnosis, intervention, repair, aggregation, and evaluation paths as a real VLM.
-
-## Main experiments
-
-Qwen2.5-VL-7B:
+## Main causal-root experiment
 
 ```bash
 python -m scenerepair.cli \
-  --config configs/mindedit_qwen25vl7b.yaml \
+  --config configs/mindedit_rootrepair.yaml \
   --task all
+
+python -m scenerepair.cli \
+  --config configs/mindedit_rootrepair.yaml \
+  --task synthetic_localization
 ```
 
-Qwen3-VL-8B:
+A five-example real-model smoke run:
 
 ```bash
 python -m scenerepair.cli \
-  --config configs/mindedit_qwen3vl8b.yaml \
-  --task all
-```
-
-vLLM/OpenAI-compatible server:
-
-```bash
-python -m scenerepair.cli \
-  --config configs/mindedit_vllm_api.yaml \
-  --task all
-```
-
-Complete wrapper:
-
-```bash
-bash scripts/run_full_mindedit.sh configs/mindedit_qwen25vl7b.yaml
+  --config configs/mindedit_rootrepair.yaml \
+  --task all \
+  --limit 5 \
+  --output-dir outputs/rootrepair_smoke5
 ```
 
 ## Resumable stages
@@ -124,62 +120,26 @@ python -m scenerepair.cli --config CONFIG --task plot
 
 All per-example files are written atomically and reused unless `--overwrite` is supplied.
 
-Subset run:
+## Ablation overrides
 
 ```bash
-python -m scenerepair.cli \
-  --config configs/mindedit_qwen25vl7b.yaml \
-  --task all \
-  --start-index 0 \
-  --end-index 20 \
-  --output-dir outputs/debug_20
+# Anomaly-only approximation
+python -m scenerepair.cli --config configs/mindedit_rootrepair.yaml --task all \
+  --set critic.necessity_threshold=0.0 \
+  --set critic.sufficiency_threshold=0.0 \
+  --set critic.interventional_consistency_root_weight=0.0
+
+# Sequence-only / weak graph ablation is implemented by removing depends_on
+# from saved traces and rerunning diagnosis with --overwrite.
+
+# Fixed-margin acceptance
+python -m scenerepair.cli --config configs/mindedit_rootrepair.yaml --task all \
+  --set repair.acceptance_repeats=1
+
+# Full regeneration
+python -m scenerepair.cli --config configs/mindedit_rootrepair.yaml --task all \
+  --set repair.preserve_verified_prefix=false
 ```
-
-Dotted config overrides:
-
-```bash
-python -m scenerepair.cli \
-  --config configs/mindedit_qwen25vl7b.yaml \
-  --task all \
-  --set model.load_in_4bit=true \
-  --set run.num_traces=5 \
-  --set repair.num_candidates=5
-```
-
-## Localization and learned critic
-
-Synthetic known-corruption localization:
-
-```bash
-python -m scenerepair.cli --config CONFIG --task synthetic_localization
-```
-
-Train the optional lightweight transition critic after collecting diagnosis files:
-
-```bash
-python -m scenerepair.cli --config CONFIG --task diagnose
-python -m scenerepair.cli --config CONFIG --task train_critic
-```
-
-Then set:
-
-```yaml
-critic:
-  mode: all
-  learned_model_path: outputs/your_run/checkpoints/transition_critic.joblib
-  symbolic_weight: 0.25
-  vlm_weight: 0.50
-  learned_weight: 0.25
-```
-
-## Multi-seed and ablations
-
-```bash
-bash scripts/run_multiseed.sh configs/mindedit_qwen25vl7b.yaml
-bash scripts/run_ablations.sh configs/mindedit_qwen25vl7b.yaml
-```
-
-The default ablation script includes symbolic-only diagnosis, no causal intervention, full regeneration, and no abstention. Any intervention, threshold, critic weight, trace count, candidate count, or objective term can also be changed through `--set`.
 
 ## Output structure
 
@@ -195,6 +155,7 @@ OUTPUT_DIR/
   tables/
     per_example_methods.csv
     per_example_repair.csv
+    per_trace_root_localization.csv
     summary_methods.csv
     summary_by_task.csv
     summary.json
@@ -202,7 +163,7 @@ OUTPUT_DIR/
   figures/
 ```
 
-Reported statistics include overall and task-level accuracy, 95% bootstrap confidence intervals, wrong-to-correct, correct-to-wrong, no-harm rate, repair attempt/apply rate, consistency gain, exact paired McNemar p-value, and synthetic localization accuracy.
+Reported statistics include overall and task-level accuracy, 95% bootstrap confidence intervals, wrong-to-correct, correct-to-wrong, no-harm rate, repair attempt/apply rate, consistency gain, necessity, sufficiency, root score, acceptance LCB, exact paired McNemar p-value, and synthetic localization accuracy.
 
 ## Local JSONL format
 
@@ -217,6 +178,4 @@ Reported statistics include overall and task-level accuracy, 95% bootstrap confi
 }
 ```
 
-Image paths are resolved relative to the JSONL file. The answer is retained for evaluation only and is never included in prompts, diagnosis, intervention, or repair.
-
-See `docs/METHOD.md` and `docs/EXPERIMENTS.md` for the formal method and recommended paper protocol.
+Image paths are resolved relative to the JSONL file. See `docs/METHOD.md` and `docs/EXPERIMENTS.md` for the formal method and recommended paper protocol.
