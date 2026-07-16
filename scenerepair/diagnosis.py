@@ -11,7 +11,7 @@ from .critics import TransitionCritic
 from .interventions import Intervention, apply_intervention, generate_interventions
 from .models.base import VisionLanguageModel
 from .prompts import option_scoring_prompt
-from .schemas import DiagnosisResult, ReasoningTrace, SpatialExample, TransitionAssessment
+from .schemas import DiagnosisResult, ReasoningTrace, SpatialExample, SpatialState, StepType, TransitionAssessment
 from .utils import js_divergence
 
 
@@ -70,6 +70,20 @@ class CausalDiagnoser:
         state.metadata["equivalent_variant"] = variant_idx
         return variant
 
+    @staticmethod
+    def _task_relevant_interventions(state: SpatialState, configured: list[str]) -> list[str]:
+        mapping = {
+            StepType.OBSERVATION.value: {"object_swap", "view_dropout"},
+            StepType.CORRESPONDENCE.value: {"object_swap", "view_dropout"},
+            StepType.REFERENCE_FRAME.value: {"frame_swap", "view_dropout"},
+            StepType.INITIAL_STATE.value: {"relation_flip", "object_swap", "frame_swap"},
+            StepType.COUNTERFACTUAL_OPERATION.value: {"operation_inverse", "frame_swap"},
+            StepType.UPDATED_STATE.value: {"relation_flip", "operation_inverse", "object_swap"},
+            StepType.VISIBILITY.value: {"visibility_flip", "view_dropout", "relation_flip"},
+        }
+        relevant = mapping.get(state.step_type, set(configured))
+        return [name for name in configured if name in relevant]
+
     def _intervention_payload(
         self,
         example: SpatialExample,
@@ -80,6 +94,7 @@ class CausalDiagnoser:
         step_idx: int,
         intervention: Intervention,
         labels: list[str],
+        structural_cache: dict[str, float] | None = None,
     ) -> dict[str, Any]:
         modified_trace = apply_intervention(trace, step_idx, intervention)
         images = example.images
@@ -90,11 +105,31 @@ class CausalDiagnoser:
                 if image_idx != intervention.dropped_view
             ]
         modified_distribution = self._distribution(example, modified_trace, images=images)
-        modified_assessments = self._assess_trace(example, modified_trace, images=images)
-        descendants = graph.descendants(step_idx)
-        affected_nodes = [step_idx] + descendants
-        original_affected = self._mean_consistency(original_assessments, affected_nodes)
-        modified_affected = self._mean_consistency(modified_assessments, affected_nodes)
+        affected_nodes = [step_idx] + graph.children.get(step_idx, [])
+
+        if structural_cache is None:
+            previous_state = modified_trace.states[step_idx - 1] if step_idx > 0 else None
+            modified_local = self.critic.score_transition(
+                example, previous_state, modified_trace.states[step_idx], images=images
+            )
+            modified_scores = [modified_local.consistency]
+            original_scores = [original_assessments[step_idx].consistency]
+            for child_idx in graph.children.get(step_idx, []):
+                child = copy.deepcopy(modified_trace.states[child_idx])
+                child.metadata["intervened_parent"] = modified_trace.states[step_idx].to_dict()
+                previous = modified_trace.states[child_idx - 1] if child_idx > 0 else None
+                modified_child = self.critic.score_transition(example, previous, child, images=images)
+                modified_scores.append(modified_child.consistency)
+                original_scores.append(original_assessments[child_idx].consistency)
+            original_affected = sum(original_scores) / len(original_scores)
+            modified_affected = sum(modified_scores) / len(modified_scores)
+            structural_cache = {
+                "intervened_consistency": modified_local.consistency,
+                "original_descendant_consistency": original_affected,
+                "intervened_descendant_consistency": modified_affected,
+            }
+        original_affected = structural_cache["original_descendant_consistency"]
+        modified_affected = structural_cache["intervened_descendant_consistency"]
         answer_shift = js_divergence(
             self._aligned(original_distribution, labels),
             self._aligned(modified_distribution, labels),
@@ -108,7 +143,10 @@ class CausalDiagnoser:
         )
         sufficiency = (
             0.65 * consistency_gain
-            + 0.20 * max(0.0, modified_assessments[step_idx].consistency - original_assessments[step_idx].consistency)
+            + 0.20 * max(
+                0.0,
+                structural_cache["intervened_consistency"] - original_assessments[step_idx].consistency,
+            )
             + 0.15 * confidence_gain
         )
         predicted_label = max(modified_distribution, key=modified_distribution.get) if modified_distribution else ""
@@ -118,7 +156,7 @@ class CausalDiagnoser:
             "description": intervention.description,
             "dropped_view": intervention.dropped_view,
             "original_consistency": original_assessments[step_idx].consistency,
-            "intervened_consistency": modified_assessments[step_idx].consistency,
+            "intervened_consistency": structural_cache["intervened_consistency"],
             "original_descendant_consistency": original_affected,
             "intervened_descendant_consistency": modified_affected,
             "answer_js_divergence": answer_shift,
@@ -129,6 +167,8 @@ class CausalDiagnoser:
             "predicted_label": predicted_label,
             "intervened_distribution": modified_distribution,
             "intervened_state": intervention.state.to_dict(),
+            "affected_nodes": affected_nodes,
+            "structural_cache": structural_cache,
         }
 
     def _select_root(self, candidates: list[dict[str, Any]], graph: CausalDependencyGraph) -> dict[str, Any]:
@@ -171,28 +211,38 @@ class CausalDiagnoser:
         assessments = self._assess_trace(example, trace)
         global_consistency = self._mean_consistency(assessments)
 
-        ranked = sorted(range(len(assessments)), key=lambda idx: (assessments[idx].consistency, idx))
+        eligible = [
+            idx for idx, state in enumerate(trace.states)
+            if state.step_type != StepType.ANSWER.value
+        ] or list(range(len(assessments)))
+        ranked = sorted(eligible, key=lambda idx: (assessments[idx].consistency, idx))
         selected = set(ranked[: max(1, self.config.intervention_top_k)])
-        for idx, assessment in enumerate(assessments):
-            if assessment.consistency < self.config.transition_threshold:
+        for idx in eligible:
+            if assessments[idx].consistency < self.config.transition_threshold:
                 selected.add(idx)
 
         intervention_rows: list[dict[str, Any]] = []
         per_step: dict[int, dict[str, list[Any]]] = defaultdict(lambda: {"families": [], "labels": []})
         variants = max(1, int(self.config.equivalent_variants))
         for step_idx in sorted(selected):
+            allowed = self._task_relevant_interventions(
+                trace.states[step_idx], self.config.intervention_types
+            )
             for intervention in generate_interventions(
                 trace.states[step_idx],
-                allowed=self.config.intervention_types,
+                allowed=allowed,
                 num_views=len(example.images),
             ):
                 family_rows: list[dict[str, Any]] = []
+                structural_cache = None
                 for variant_idx in range(variants):
                     variant = self._equivalent_variant(intervention, variant_idx)
                     row = self._intervention_payload(
                         example, trace, graph, original_distribution, assessments,
-                        step_idx, variant, labels,
+                        step_idx, variant, labels, structural_cache=structural_cache,
                     )
+                    structural_cache = row["structural_cache"]
+                    row.pop("structural_cache", None)
                     row["variant_idx"] = variant_idx
                     family_rows.append(row)
                     intervention_rows.append(row)
