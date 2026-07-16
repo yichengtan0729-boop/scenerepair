@@ -7,36 +7,13 @@ from ..schemas import SpatialState, StepType
 
 VALID_FRAMES = {"world", "unknown", "camera_1", "camera_2", "camera_3"}
 OPERATION_WORDS = {
-    "move",
-    "translate",
-    "translation",
-    "rotate",
-    "rotation",
-    "clockwise",
-    "counterclockwise",
-    "counter-clockwise",
-    "left",
-    "right",
-    "forward",
-    "backward",
-    "toward",
-    "away",
-    "pivot",
+    "move", "translate", "translation", "rotate", "rotation", "clockwise",
+    "counterclockwise", "counter-clockwise", "left", "right", "forward",
+    "backward", "toward", "away", "pivot",
 }
 RELATIONS = {
-    "left",
-    "right",
-    "front",
-    "behind",
-    "above",
-    "below",
-    "near",
-    "far",
-    "inside",
-    "overlap",
-    "visible",
-    "occluded",
-    "absent",
+    "left", "right", "front", "behind", "above", "below", "near", "far",
+    "inside", "overlap", "visible", "occluded", "absent",
 }
 
 
@@ -49,7 +26,7 @@ class SymbolicAssessment:
 
 
 class SymbolicTransitionCritic:
-    """Schema- and operation-aware critic that never accesses the answer label."""
+    """Schema-, dependency-, and operation-aware critic that never accesses the answer label."""
 
     @staticmethod
     def _frame_score(state: SpatialState) -> float:
@@ -72,6 +49,18 @@ class SymbolicTransitionCritic:
         if not 0.0 <= state.confidence <= 1.0:
             score -= 0.2
         return min(1.0, max(0.0, score))
+
+    @staticmethod
+    def _dependency_score(state: SpatialState) -> float:
+        if state.step_idx == 0:
+            return 1.0 if not state.depends_on else 0.4
+        if not state.depends_on:
+            return 0.45
+        if any(parent < 0 or parent >= state.step_idx for parent in state.depends_on):
+            return 0.0
+        if len(state.depends_on) != len(set(state.depends_on)):
+            return 0.6
+        return 1.0
 
     @staticmethod
     def _operation_score(state: SpatialState) -> float:
@@ -117,16 +106,18 @@ class SymbolicTransitionCritic:
     def score(self, previous: SpatialState | None, state: SpatialState) -> SymbolicAssessment:
         components = {
             "format": self._format_score(state),
+            "dependency": self._dependency_score(state),
             "frame": self._frame_score(state),
             "operation": self._operation_score(state),
             "state": self._state_score(previous, state),
             "view": self._view_score(state),
         }
-        weights = {"format": 0.12, "frame": 0.23, "operation": 0.24, "state": 0.29, "view": 0.12}
+        weights = {"format": 0.10, "dependency": 0.16, "frame": 0.19, "operation": 0.21, "state": 0.24, "view": 0.10}
         score = sum(components[key] * weights[key] for key in weights)
         dominant = min(components, key=components.get)
         error_map = {
             "format": "format",
+            "dependency": "dependency",
             "frame": "reference_frame",
             "operation": "operation",
             "state": "relation_update",
