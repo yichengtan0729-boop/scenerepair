@@ -1,44 +1,40 @@
-# SceneRepair method specification
+# SceneRepair: necessity-sufficiency causal-root method
 
 ## Problem
 
-Given multiple views `I`, a counterfactual spatial question `q`, and options `Y`, a frozen VLM produces a typed trajectory `R=(S_0,...,S_T)` and an answer distribution. SceneRepair must detect and repair a faulty transition without the ground-truth answer.
+A frozen VLM receives multi-view images, a counterfactual spatial question, and answer options. It produces a typed state trajectory and an answer distribution. SceneRepair diagnoses and repairs an upstream causal error without using the benchmark label during inference.
 
-## Typed states
+## Typed causal dependency graph
 
-Each state records step type, involved objects, reference frame, operation, relations before and after, visibility, evidence views, and confidence. The state is the causal unit; arbitrary natural-language sentences are not treated as interchangeable units.
+Each state contains a step type, objects, reference frame, operation, relations, visibility, evidence views, and direct prerequisite indices (`depends_on`). Missing dependencies are inferred from the typed order and object overlap. The result is a directed acyclic graph whose edges encode which earlier commitments are required by each state.
 
-## Transition consistency
+## Transition anomaly
 
-The default hybrid critic combines:
+A hybrid critic combines symbolic checks, image-conditioned VLM verification, and an optional learned critic. The anomaly of node `t` is `1 - consistency_t`.
 
-- symbolic schema and state-transition checks;
-- image-conditioned VLM verification;
-- an optional learned lightweight critic.
+## Paired necessity and sufficiency interventions
 
-Weights are normalized over enabled components.
+For candidate node `t`, SceneRepair applies structured interventions to reference frame, operation, relations, object identity, visibility, and visual evidence.
 
-## Interventions
+- **Necessity:** perturbing `t` should change the answer distribution or reduce consistency over the descendant closure.
+- **Sufficiency:** a constraint-improving intervention at `t` should restore consistency over the descendant closure without changing ancestors.
+- **Interventional consistency:** semantically equivalent lexical realizations of the same structured intervention should yield stable effects and model predictions.
 
-For low-consistency candidate transitions, the method applies:
+The causal-root score is a weighted geometric mean of anomaly, necessity, sufficiency, and interventional consistency. A node is selected only if it passes all component thresholds. Among competitive valid nodes, SceneRepair chooses an ancestor-minimal root rather than the largest downstream symptom.
 
-- reference-frame swap;
-- inverse operation;
-- relation flip;
-- object-identity swap;
-- visibility flip;
-- view dropout.
+## Descendant-closed minimal repair
 
-For every intervention, it recomputes the answer distribution and transition consistency.
+The verified prefix is preserved. The repair prompt receives the localized root, dependency graph, and descendant closure. Candidate suffixes are ranked by consistency, answer confidence, and minimality.
 
-## Localization
+## Calibrated label-free acceptance
 
-The per-intervention causal effect is the weighted sum of Jensen-Shannon divergence in answer distributions and positive consistency improvement. The earliest transition passing anomaly and causal thresholds is selected. This prioritizes an upstream cause over a downstream symptom.
+Each original/candidate pair is scored repeatedly. SceneRepair computes a one-sided lower confidence bound for the candidate's objective gain. A repair is accepted only when the lower bound exceeds the abstention margin and the consistency gain is non-negative. The benchmark label is used only by `evaluation.py`.
 
-## Repair
+## Main ablations
 
-The verified prefix is copied exactly. Multiple suffix candidates are generated from the localized transition. Each candidate is ranked by global consistency, answer confidence, and minimality. The original trace is an implicit no-op candidate. The repair is applied only when the best candidate exceeds it by the configured margin.
-
-## Label-free guarantee
-
-`SpatialExample.answer` is not included in any generation, critic, scoring, intervention, or repair prompt. It is consumed only in `evaluation.py`. The unit test `test_label_free.py` verifies that changing the stored label leaves diagnosis unchanged.
+1. anomaly only;
+2. necessity without sufficiency;
+3. sequence-only localization without the dependency graph;
+4. no interventional-consistency test;
+5. full regeneration instead of descendant-closed repair;
+6. fixed-margin acceptance instead of calibrated lower confidence bound.
