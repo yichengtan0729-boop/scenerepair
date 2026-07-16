@@ -1,0 +1,67 @@
+data:
+  source: hf
+  dataset_name: ZODAOfficial/MindEdit-Bench
+  configs:
+    - single_view_spatial_editing
+    - cross_view_visibility
+  split: test
+  image_columns: [view1, view2, view3]
+
+model:
+  backend: qwen
+  model_name: Qwen/Qwen2.5-VL-7B-Instruct
+  device_map: auto
+  dtype: bfloat16
+  load_in_4bit: false
+  max_new_tokens: 1200
+  temperature: 0.2
+  top_p: 0.9
+
+critic:
+  mode: hybrid
+  symbolic_weight: 0.35
+  vlm_weight: 0.65
+  learned_weight: 0.0
+  transition_threshold: 0.58
+  global_threshold: 0.62
+  intervention_top_k: 4
+  intervention_types: [frame_swap, operation_inverse, relation_flip, object_swap, visibility_flip, view_dropout]
+  judge_repeats: 1
+  necessity_threshold: 0.08
+  sufficiency_threshold: 0.04
+  root_threshold: 0.18
+  root_margin: 0.03
+  equivalent_variants: 3
+  answer_shift_weight: 0.50
+  descendant_consistency_weight: 0.50
+  anomaly_root_weight: 1.0
+  necessity_root_weight: 1.0
+  sufficiency_root_weight: 1.0
+  interventional_consistency_root_weight: 0.5
+
+repair:
+  enabled: true
+  num_candidates: 3
+  score_consistency_weight: 0.55
+  score_confidence_weight: 0.25
+  score_minimality_weight: 0.20
+  abstain_margin: 0.02
+  preserve_verified_prefix: true
+  descendant_only: true
+  acceptance_repeats: 3
+  acceptance_confidence: 0.90
+  minimum_consistency_gain: 0.0
+
+run:
+  output_dir: outputs/mindedit_rootrepair_seed42
+  seed: 42
+  start_index: 0
+  end_index: null
+  limit: null
+  num_traces: 3
+  max_reasoning_steps: 8
+  overwrite: false
+  run_baselines: true
+  baseline_methods: [direct, cot, self_consistency, full_reflection]
+  save_raw_responses: true
+  fail_fast: false
