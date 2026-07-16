@@ -27,7 +27,7 @@ Question:
 Choices:
 {format_choices(example.choices)}
 
-Construct a typed scene-state trajectory. Explicitly distinguish camera-centric, object-centric, and world-centric reference frames. Apply every hypothetical translation or rotation before answering. Use at most {max_steps} states.
+Construct a typed scene-state trajectory and an explicit directed dependency structure. Distinguish camera-centric, object-centric, and world-centric reference frames. Apply every hypothetical translation or rotation before answering. Use at most {max_steps} states. A state may depend only on earlier states.
 
 Return ONLY one valid JSON object with this schema:
 {{
@@ -43,6 +43,7 @@ Return ONLY one valid JSON object with this schema:
       "relations_after": ["subject relation object"],
       "visibility": ["object visible/occluded/absent in view k"],
       "evidence_views": [1,2,3],
+      "depends_on": ["indices of direct prerequisite states"],
       "confidence": 0.0
     }}
   ],
@@ -77,25 +78,21 @@ Reasoning state:
 Return only one answer letter."""
 
 
-def transition_judge_prompt(
-    example: SpatialExample,
-    previous: SpatialState | None,
-    current: SpatialState,
-) -> str:
+def transition_judge_prompt(example: SpatialExample, previous: SpatialState | None, current: SpatialState) -> str:
     prev = json.dumps(previous.to_dict() if previous else {"scene": "initial visual evidence"}, ensure_ascii=False)
     cur = json.dumps(current.to_dict(), ensure_ascii=False)
-    return f"""Act as a label-free spatial transition verifier. You must not infer or use the benchmark answer. Judge whether the current state follows from the previous state, the visible views, the stated reference frame, and any hypothetical operation.
+    return f"""Act as a label-free spatial transition verifier. You must not infer or use the benchmark answer. Judge whether the current state follows from the previous state, its declared prerequisite states, the visible views, the stated reference frame, and any hypothetical operation.
 Question: {example.question}
 Previous state: {prev}
 Current state: {cur}
-Check object identity across views, reference-frame consistency, operation direction and magnitude, relation update, visibility or occlusion, and unsupported claims.
+Check object identity across views, dependency validity, reference-frame consistency, operation direction and magnitude, relation update, visibility or occlusion, and unsupported claims.
 Return ONLY JSON:
-{{"score": 0.0, "error_type": "none|object_identity|reference_frame|operation|relation_update|visibility|unsupported|format", "rationale": "short reason", "components": {{"view":0.0,"frame":0.0,"operation":0.0,"state":0.0}}}}
+{{"score": 0.0, "error_type": "none|object_identity|dependency|reference_frame|operation|relation_update|visibility|unsupported|format", "rationale": "short reason", "components": {{"view":0.0,"dependency":0.0,"frame":0.0,"operation":0.0,"state":0.0}}}}
 A score of 1 means fully consistent and 0 means clearly inconsistent."""
 
 
 def global_judge_prompt(example: SpatialExample, trace: ReasoningTrace) -> str:
-    return f"""Act as a label-free verifier. Do not use or guess the benchmark label. Rate whether this entire spatial reasoning trajectory is internally coherent and grounded in the supplied images.
+    return f"""Act as a label-free verifier. Do not use or guess the benchmark label. Rate whether this entire spatial reasoning trajectory and its dependency graph are internally coherent and grounded in the supplied images.
 Question: {example.question}
 Trajectory:
 {trace.state_text()}
@@ -112,20 +109,24 @@ def repair_prompt(
     prefix = [state.to_dict() for state in trace.states[:localized_step]]
     faulty = trace.states[localized_step].to_dict() if localized_step < len(trace.states) else {}
     suffix = [state.to_dict() for state in trace.states[localized_step:]]
-    return f"""Repair a counterfactual spatial reasoning trajectory without access to the correct answer. Preserve the verified prefix exactly. Recompute the localized transition and all downstream states from the images, question, and explicit reference frame.
+    descendants = diagnosis.get("descendant_steps", [])
+    graph = diagnosis.get("dependency_graph", {})
+    return f"""Repair a counterfactual spatial reasoning trajectory without access to the correct answer. The diagnosis was obtained using paired necessity and sufficiency interventions. Preserve the verified prefix exactly. Recompute the localized causal root and its descendants; do not alter unrelated states unless required to restore a valid dependency graph.
 
 Question: {example.question}
 Choices:
 {format_choices(example.choices)}
 Verified prefix JSON: {json.dumps(prefix, ensure_ascii=False)}
-Localized step: {localized_step}
+Localized causal root: {localized_step}
+Descendant closure: {json.dumps(descendants)}
+Dependency graph: {json.dumps(graph, ensure_ascii=False)}
 Faulty state: {json.dumps(faulty, ensure_ascii=False)}
 Original suffix: {json.dumps(suffix, ensure_ascii=False)}
-Diagnosis: {json.dumps(diagnosis, ensure_ascii=False)}
+Root diagnosis: {json.dumps(diagnosis, ensure_ascii=False)}
 
 Return ONLY JSON with at most {num_states} newly generated suffix states:
-{{"states":[same state schema],"final_answer":"letter"}}
-The returned states must start at step_idx={localized_step}. Do not repeat the verified prefix. Prefer the smallest correction that restores view, frame, operation, relation, and visibility consistency."""
+{{"states":[same state schema, including depends_on],"final_answer":"letter"}}
+The returned states must start at step_idx={localized_step}. Do not repeat the verified prefix. Prefer the smallest descendant-closed correction that restores view, dependency, frame, operation, relation, and visibility consistency."""
 
 
 def reflection_prompt(example: SpatialExample, original_response: str) -> str:
