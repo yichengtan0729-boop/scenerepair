@@ -53,13 +53,24 @@ class CriticConfig:
     learned_weight: float = 0.0
     learned_model_path: str | None = None
     transition_threshold: float = 0.58
-    causal_threshold: float = 0.08
     global_threshold: float = 0.62
     intervention_top_k: int = 4
     intervention_types: list[str] = field(default_factory=lambda: [
         "frame_swap", "operation_inverse", "relation_flip", "object_swap", "visibility_flip", "view_dropout"
     ])
     judge_repeats: int = 1
+    necessity_threshold: float = 0.08
+    sufficiency_threshold: float = 0.04
+    root_threshold: float = 0.18
+    root_margin: float = 0.03
+    equivalent_variants: int = 3
+    answer_shift_weight: float = 0.50
+    descendant_consistency_weight: float = 0.50
+    anomaly_root_weight: float = 1.0
+    necessity_root_weight: float = 1.0
+    sufficiency_root_weight: float = 1.0
+    interventional_consistency_root_weight: float = 0.5
+    causal_threshold: float = 0.08
 
 
 @dataclass
@@ -71,6 +82,10 @@ class RepairConfig:
     score_minimality_weight: float = 0.20
     abstain_margin: float = 0.02
     preserve_verified_prefix: bool = True
+    descendant_only: bool = True
+    acceptance_repeats: int = 3
+    acceptance_confidence: float = 0.90
+    minimum_consistency_gain: float = 0.0
 
 
 @dataclass
