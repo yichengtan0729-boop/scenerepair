@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "scenerepair"
-version = "1.0.0"
-description = "Label-free causal localization and minimal suffix repair for counterfactual spatial reasoning"
+version = "1.1.0"
+description = "Label-free necessity-sufficiency causal-root localization and minimal repair for counterfactual spatial reasoning"
 readme = "README.md"
 requires-python = ">=3.10"
 license = {text = "MIT"}
